@@ -16,7 +16,6 @@
 package com.squareup.picasso;
 
 import android.os.IBinder;
-import android.view.View.OnAttachStateChangeListener;
 import android.view.ViewTreeObserver;
 import android.widget.ImageView;
 import org.junit.Before;
@@ -42,53 +41,56 @@ import static org.mockito.Mockito.when;
 import static org.mockito.MockitoAnnotations.initMocks;
 
 @RunWith(RobolectricTestRunner.class)
-@SuppressWarnings("deprecation")
 public class DeferredRequestCreatorTest {
 
   @Captor ArgumentCaptor<Action> actionCaptor;
-  @Captor ArgumentCaptor<OnAttachStateChangeListener> attachListenerCaptor;
 
   @Before public void setUp() {
     initMocks(this);
   }
 
-  @Test public void initAddsAttachListenerWhichDefersLayoutListener() {
-    ImageView target = mockFitImageViewTarget(true);
-    ViewTreeObserver observer = target.getViewTreeObserver();
-    DeferredRequestCreator request =
-        new DeferredRequestCreator(mock(RequestCreator.class), target);
-    verify(target).addOnAttachStateChangeListener(attachListenerCaptor.capture());
-    verifyNoMoreInteractions(observer);
-
-    // Now trigger attach and ensure we defer to the pre-draw listener.
-    OnAttachStateChangeListener listener = attachListenerCaptor.getValue();
-    listener.onViewAttachedToWindow(target);
-    verify(target).removeOnAttachStateChangeListener(listener);
-    verify(observer).addOnPreDrawListener(request);
-  }
-
-  @Test public void initAttachedTargetSkipsAttachListener() {
+  @Test public void initWhileAttachedAddsAttachAndPreDrawListener() {
     ImageView target = mockFitImageViewTarget(true);
     ViewTreeObserver observer = target.getViewTreeObserver();
     doReturn(mock(IBinder.class)).when(target).getWindowToken(); // Pretend to be attached.
     DeferredRequestCreator request =
-        new DeferredRequestCreator(mock(RequestCreator.class), target);
+        new DeferredRequestCreator(mock(RequestCreator.class), target, null);
     verify(observer).addOnPreDrawListener(request);
+  }
+
+  @Test public void initWhileDetachedAddsAttachListenerWhichDefersPreDrawListener() {
+    ImageView target = mockFitImageViewTarget(true);
+    ViewTreeObserver observer = target.getViewTreeObserver();
+    DeferredRequestCreator request =
+        new DeferredRequestCreator(mock(RequestCreator.class), target, null);
+    verify(target).addOnAttachStateChangeListener(request);
+    verifyNoMoreInteractions(observer);
+
+    // Attach and ensure we defer to the pre-draw listener.
+    request.onViewAttachedToWindow(target);
+    verify(observer).addOnPreDrawListener(request);
+
+    // Configure the target to return a new VTO.
+    when(target.getViewTreeObserver()).thenReturn(mock(ViewTreeObserver.class));
+
+    // Detach and ensure we remove the pre-draw listener from the original VTO.
+    request.onViewDetachedFromWindow(target);
+    verify(observer).removeOnPreDrawListener(request);
   }
 
   @Test public void cancelWhileAttachedRemovesAttachListener() {
     ImageView target = mockFitImageViewTarget(true);
-    DeferredRequestCreator request = new DeferredRequestCreator(mock(RequestCreator.class), target);
-    verify(target).addOnAttachStateChangeListener(attachListenerCaptor.capture());
+    DeferredRequestCreator request = new DeferredRequestCreator(mock(RequestCreator.class), target, null);
+    verify(target).addOnAttachStateChangeListener(request);
     request.cancel();
-    verify(target).removeOnAttachStateChangeListener(attachListenerCaptor.getValue());
+    verify(target).removeOnAttachStateChangeListener(request);
   }
 
   @Test public void cancelTwiceWhileAttachedOnlyPerformsOnce() {
     ImageView target = mockFitImageViewTarget(true);
     when(target.getWindowToken()).thenReturn(mock(IBinder.class));
     ViewTreeObserver observer = target.getViewTreeObserver();
-    DeferredRequestCreator request = new DeferredRequestCreator(mock(RequestCreator.class), target);
+    DeferredRequestCreator request = new DeferredRequestCreator(mock(RequestCreator.class), target, null);
     request.cancel();
     request.cancel();
     verify(observer).removeOnPreDrawListener(request);
@@ -108,7 +110,7 @@ public class DeferredRequestCreatorTest {
     ImageView target = mockFitImageViewTarget(true);
     RequestCreator creator = mock(RequestCreator.class);
     when(creator.getTag()).thenReturn("TAG");
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.cancel();
     verify(creator).clearTag();
   }
@@ -117,7 +119,7 @@ public class DeferredRequestCreatorTest {
     ImageView target = mockFitImageViewTarget(true);
     when(target.getWindowToken()).thenReturn(mock(IBinder.class));
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     ViewTreeObserver viewTreeObserver = target.getViewTreeObserver();
     request.target.clear();
     request.onPreDraw();
@@ -130,7 +132,7 @@ public class DeferredRequestCreatorTest {
     ImageView target = mockFitImageViewTarget(false);
     when(target.getWindowToken()).thenReturn(mock(IBinder.class));
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     ViewTreeObserver viewTreeObserver = target.getViewTreeObserver();
     request.onPreDraw();
     verify(viewTreeObserver).addOnPreDrawListener(request);
@@ -144,7 +146,7 @@ public class DeferredRequestCreatorTest {
     when(target.getWidth()).thenReturn(0);
     when(target.getHeight()).thenReturn(0);
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.onPreDraw();
     verify(target.getViewTreeObserver(), never()).removeOnPreDrawListener(request);
     verifyZeroInteractions(creator);
@@ -156,7 +158,7 @@ public class DeferredRequestCreatorTest {
     when(target.getHeight()).thenReturn(100);
     when(target.isLayoutRequested()).thenReturn(true);
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.onPreDraw();
     verify(target.getViewTreeObserver(), never()).removeOnPreDrawListener(request);
     verifyZeroInteractions(creator);
@@ -165,7 +167,7 @@ public class DeferredRequestCreatorTest {
   @Test public void cancelSkipsWithNullTarget() {
     ImageView target = mockFitImageViewTarget(true);
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.target.clear();
     request.cancel();
     verify(target.getViewTreeObserver(), never()).removeOnPreDrawListener(request);
@@ -174,7 +176,7 @@ public class DeferredRequestCreatorTest {
   @Test public void cancelSkipsIfViewTreeObserverIsDead() {
     ImageView target = mockFitImageViewTarget(false);
     RequestCreator creator = mock(RequestCreator.class);
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.cancel();
     verify(target.getViewTreeObserver(), never()).removeOnPreDrawListener(request);
   }
@@ -191,7 +193,7 @@ public class DeferredRequestCreatorTest {
 
     ViewTreeObserver observer = target.getViewTreeObserver();
 
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.onPreDraw();
 
     verify(observer).removeOnPreDrawListener(request);
@@ -215,7 +217,7 @@ public class DeferredRequestCreatorTest {
 
     ViewTreeObserver observer = target.getViewTreeObserver();
 
-    DeferredRequestCreator request = new DeferredRequestCreator(creator, target);
+    DeferredRequestCreator request = new DeferredRequestCreator(creator, target, null);
     request.onPreDraw();
     request.onPreDraw();
 

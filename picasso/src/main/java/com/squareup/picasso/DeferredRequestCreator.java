@@ -19,34 +19,40 @@ import android.support.annotation.VisibleForTesting;
 import android.view.View;
 import android.view.View.OnAttachStateChangeListener;
 import android.view.ViewTreeObserver;
+import android.view.ViewTreeObserver.OnPreDrawListener;
 import android.widget.ImageView;
 import java.lang.ref.WeakReference;
 
-class DeferredRequestCreator implements ViewTreeObserver.OnPreDrawListener {
+class DeferredRequestCreator implements OnPreDrawListener, OnAttachStateChangeListener {
+  private final RequestCreator creator;
+  @VisibleForTesting final WeakReference<ImageView> target;
 
-  final RequestCreator creator;
-  final WeakReference<ImageView> target;
-  OnAttachStateChangeListener attachListener;
-  Callback callback;
-
-  @VisibleForTesting DeferredRequestCreator(RequestCreator creator, ImageView target) {
-    this(creator, target, null);
-  }
+  private ViewTreeObserver vto;
+  @VisibleForTesting Callback callback;
 
   DeferredRequestCreator(RequestCreator creator, ImageView target, Callback callback) {
     this.creator = creator;
     this.target = new WeakReference<>(target);
     this.callback = callback;
 
-    // Since the view on which an image is being requested might not be attached to a hierarchy,
-    // defer adding the pre-draw listener until the view is attached. This works around a platform
-    // behavior where a global, dummy VTO is used until a real one is available on attach.
-    // See: https://github.com/square/picasso/issues/1321
-    if (target.getWindowToken() == null) {
-      defer(target);
-    } else {
-      target.getViewTreeObserver().addOnPreDrawListener(this);
+    target.addOnAttachStateChangeListener(this);
+
+    // Only add the pre-draw listener if the view is already attached.
+    if (target.getWindowToken() != null) {
+      onViewAttachedToWindow(target);
     }
+  }
+
+  @Override public void onViewAttachedToWindow(View view) {
+    // Save the VTO to which we're registering so that we can unregister from it directly should
+    // the view be detached. This works around a bug where the listener is leaked on detach without
+    // a pre-draw event. See: https://github.com/square/picasso/issues/1321
+    vto = view.getViewTreeObserver();
+    vto.addOnPreDrawListener(DeferredRequestCreator.this);
+  }
+
+  @Override public void onViewDetachedFromWindow(View v) {
+    vto.removeOnPreDrawListener(DeferredRequestCreator.this);
   }
 
   @Override public boolean onPreDraw() {
@@ -54,7 +60,7 @@ class DeferredRequestCreator implements ViewTreeObserver.OnPreDrawListener {
     if (target == null) {
       return true;
     }
-    ViewTreeObserver vto = target.getViewTreeObserver();
+
     if (!vto.isAlive()) {
       return true;
     }
@@ -66,6 +72,7 @@ class DeferredRequestCreator implements ViewTreeObserver.OnPreDrawListener {
       return true;
     }
 
+    target.removeOnAttachStateChangeListener(this);
     vto.removeOnPreDrawListener(this);
     this.target.clear();
 
@@ -83,34 +90,15 @@ class DeferredRequestCreator implements ViewTreeObserver.OnPreDrawListener {
     }
     this.target.clear();
 
-    if (attachListener != null) {
-      target.removeOnAttachStateChangeListener(attachListener);
-      attachListener = null;
-    } else {
-      ViewTreeObserver vto = target.getViewTreeObserver();
-      if (!vto.isAlive()) {
-        return;
-      }
-      vto.removeOnPreDrawListener(this);
+    target.removeOnAttachStateChangeListener(this);
+
+    if (!vto.isAlive()) {
+      return;
     }
+    vto.removeOnPreDrawListener(this);
   }
 
   Object getTag() {
     return creator.getTag();
-  }
-
-  private void defer(View view) {
-    attachListener = new OnAttachStateChangeListener() {
-      @Override public void onViewAttachedToWindow(View view) {
-        view.removeOnAttachStateChangeListener(this);
-        view.getViewTreeObserver().addOnPreDrawListener(DeferredRequestCreator.this);
-
-        attachListener = null;
-      }
-
-      @Override public void onViewDetachedFromWindow(View view) {
-      }
-    };
-    view.addOnAttachStateChangeListener(attachListener);
   }
 }
